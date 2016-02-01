@@ -79,10 +79,58 @@ var github_user_orgs = function(username, callback) {
     $.getJSON('https://api.github.com/users/' + username + '/orgs?callback=?', callback);
 }
 
+// Check to see if the user has starred the resume.github.com repo.
+//
+// Returns true/false.
+var github_user_starred_resume = function(username, page) {
+    var star  = false;
+    var repos = [];
+    var page  = (page ? page : 1);
+    var url   = 'https://api.github.com/users/' + username + '/starred?page=' + page;
+
+    $.ajax({
+        url: url,
+        async: false,
+        dataType: 'json',
+        success: function(data) {
+            repos = data;
+        }
+    });
+
+    $.each(repos, function(i, repo) {
+        if (repo.full_name == "resume/resume.github.com") {
+            star = true;
+            return false; // stop iterating
+        }
+    });
+
+    if (star) {
+        return star;
+    }
+
+    if (repos.length > 0) {
+        star = github_user_starred_resume(username, page + 1);
+    }
+
+    return star;
+}
+
 var run = function() {
     var itemCount = 0,
         maxItems = 5,
         maxLanguages = 9;
+
+    if (! github_user_starred_resume(username)) {
+        $.ajax({
+            url: 'views/opt_out.html',
+            dataType: 'html',
+            success: function(data) {
+                var template = data;
+                $('#resume').html(data);
+            }
+        });
+        return;
+    }
 
     var res = github_user(username, function(data) {
         data = data.data;
@@ -105,18 +153,29 @@ var run = function() {
             addHttp = 'http://';
         }
 
+        // set view.name to the "friendly" name e.g. "John Doe". If not defined
+        // (in which case data.name is empty), fall back to the login
+        // name e.g. "johndoe"
         var name = username;
-        if (data.name !== null && data.name !== undefined) {
+        if (data.name !== null && data.name !== undefined && data.name.length) {
             name = data.name;
+        }
+
+        var avatar = '';
+        if (data.type == 'Organization'){
+            avatar = data.avatar_url.match(/https:\/\/secure.gravatar.com\/avatar\/[0-9a-z]+/)[0];
+            avatar += '?s=140&amp;d=https://github.com/images/gravatars/gravatar-140.png';
         }
 
         var view = {
             name: name,
+            type: data.type,
             email: data.email,
             created_at: data.created_at,
             earlyAdopter: 0,
             location: data.location,
             gravatar_id: data.gravatar_id,
+            avatar_url: avatar,
             repos: data.public_repos,
             reposLabel: data.public_repos > 1 ? 'repositories' : 'repository',
             followers: data.followers,
@@ -128,7 +187,7 @@ var run = function() {
         };
         
         // We consider a limit of 4 months since the GitHub opening (Feb 2008) to be considered as an early adopter
-        if (since == '2008' && sinceMonth <= 5) {
+        if ((since == '2008' && sinceMonth <= 5) || since <= '2007') {
             view.earlyAdopter = 1;
         }
 		
@@ -145,8 +204,8 @@ var run = function() {
             var FIFTH_STEP = 150;
             var EXTRA_POINT_GAIN = 1;
             
-            var statusScore = view.repos * COEF_REPOS 
-                            + data.public_repos * COEF_GISTS 
+            var statusScore = data.public_repos * COEF_REPOS 
+                            + data.public_gists * COEF_GISTS 
                             + data.followers * COEF_FOLLOWERS 
                             + data.following * COEF_FOLLOWING;
             
@@ -181,11 +240,12 @@ var run = function() {
         };
 		
         if (data.blog !== undefined && data.blog !== null && data.blog !== '') {
-            view.blog = addHttp + data.blog;
+            view.website = addHttp + data.blog;
         }
 
+        var resume = (data.type == 'User' ? 'views/resume.html' : 'views/resumeOrgs.html');
         $.ajax({
-            url: 'views/resume.html',
+            url: resume,
             dataType: 'html',
             success: function(data) {
                 var template = data,
@@ -311,8 +371,8 @@ var run = function() {
                             username: username,
                             watchers: repo.info.watchers,
                             forks: repo.info.forks,
-                            watchersLabel: repo.info.watchers > 1 ? 'watchers' : 'watcher',
-                            forksLabel: repo.info.forks > 1 ? 'forks' : 'fork',
+                            watchersLabel: repo.info.watchers == 0 || repo.info.watchers > 1 ? 'watchers' : 'watcher',
+                            forksLabel: repo.info.forks == 0 || repo.info.forks > 1 ? 'forks' : 'fork',
                         };
 
                         if (itemCount == sorted.length - 1 || itemCount == maxItems - 1) {
@@ -326,7 +386,11 @@ var run = function() {
                         ++itemCount;
                     });
                 } else {
-                    $('#jobs').html('').append('<p class="enlarge">I do not have any public repositories. Sorry.</p>');
+                    if(data.length > 0){
+                      $('#jobs').html('').append('<p class="enlarge">All of this user\'s repositories seem to be forks. Sorry.</p>');
+                    } else {
+                      $('#jobs').html('').append('<p class="enlarge">Unfortunately, this user does not seem to have any <strong>public</strong> repositories.</p>');
+                    }
                 }
             }
         });
